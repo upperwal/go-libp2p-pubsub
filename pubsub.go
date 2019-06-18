@@ -107,6 +107,8 @@ type PubSub struct {
 	signStrict bool
 
 	ctx context.Context
+
+	peerFilter PeerFilter
 }
 
 // PubSubRouter is the message router component of PubSub.
@@ -564,6 +566,9 @@ func (p *PubSub) handleIncomingRPC(rpc *RPC) {
 	for _, subopt := range rpc.GetSubscriptions() {
 		t := subopt.GetTopicid()
 		if subopt.GetSubscribe() {
+			if p.peerFilter != nil && !p.peerFilter.FilterSubscriber(rpc.from, t) {
+				continue
+			}
 			tmap, ok := p.topics[t]
 			if !ok {
 				tmap = make(map[peer.ID]struct{})
@@ -580,6 +585,7 @@ func (p *PubSub) handleIncomingRPC(rpc *RPC) {
 		}
 	}
 
+OUTER:
 	for _, pmsg := range rpc.GetPublish() {
 		if !p.subscribedToMsg(pmsg) {
 			log.Warning("received message we didn't subscribe to. Dropping.")
@@ -587,6 +593,14 @@ func (p *PubSub) handleIncomingRPC(rpc *RPC) {
 		}
 
 		msg := &Message{pmsg}
+		if p.peerFilter != nil {
+			res := p.peerFilter.FilterPublisher(msg.GetFrom(), msg.GetTopicIDs())
+			for _, r := range res {
+				if !r {
+					break OUTER
+				}
+			}
+		}
 		p.pushMsg(rpc.from, msg)
 	}
 
@@ -781,4 +795,8 @@ func (p *PubSub) UnregisterTopicValidator(topic string) error {
 
 	p.rmVal <- rmVal
 	return <-rmVal.resp
+}
+
+func (p *PubSub) SetInOutPeerFilter(pf PeerFilter) {
+	p.peerFilter = pf
 }
